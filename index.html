@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LA Street Centerlines</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --ink: #1d2b36;
+    --muted: #5d6c78;
+    --paper: #f5f7f8;
+    --rule: #d5dde2;
+    --street: #2b6a8a;
+    --hover: #1b9aaa;
+    --selected: #e0a100;
+    --sidebar-w: 340px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    display: flex;
+    font-family: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", sans-serif;
+    color: var(--ink);
+    background: var(--paper);
+  }
+
+  #sidebar {
+    width: var(--sidebar-w);
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    background: #fff;
+    border-right: 1px solid var(--rule);
+    z-index: 1000;
+  }
+  #sidebar header {
+    padding: 20px 22px 16px;
+    border-bottom: 1px solid var(--rule);
+  }
+  #sidebar h1 {
+    margin: 0;
+    font-size: 1.5rem;
+    line-height: 1.25;
+    font-weight: 650;
+    letter-spacing: -0.01em;
+    overflow-wrap: anywhere;
+  }
+  #sidebar footer {
+    padding: 10px 22px;
+    border-top: 1px solid var(--rule);
+  }
+  #status {
+    margin: 0;
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+  #detail {
+    flex: 1;
+    overflow-y: auto;
+    padding: 22px;
+  }
+  #empty {
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  #description {
+    margin: 0;
+    font-size: 1rem;
+    line-height: 1.6;
+    border-left: 4px solid var(--selected);
+    padding-left: 14px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+  details {
+    margin-top: 28px;
+    border-top: 1px solid var(--rule);
+    padding-top: 12px;
+  }
+  summary {
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: var(--muted);
+    padding: 4px 0;
+  }
+  summary:focus-visible, button:focus-visible {
+    outline: 2px solid var(--hover);
+    outline-offset: 2px;
+  }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 6px 0; vertical-align: top; border-bottom: 1px solid var(--rule); }
+  th { width: 42%; font-weight: 500; color: var(--muted); padding-right: 10px; overflow-wrap: anywhere; }
+  td { overflow-wrap: anywhere; }
+  #clear {
+    margin-top: 22px;
+    font: inherit;
+    font-size: 0.9rem;
+    padding: 7px 14px;
+    border: 1px solid var(--rule);
+    background: #fff;
+    color: var(--ink);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  #clear:hover { background: var(--paper); }
+  #error {
+    display: none;
+    margin: 22px;
+    padding: 14px;
+    border: 1px solid #c0392b;
+    background: #fdf0ee;
+    border-radius: 4px;
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+
+  #map { flex: 1; height: 100%; }
+
+  @media (max-width: 700px) {
+    body { flex-direction: column-reverse; }
+    #sidebar { width: 100%; height: 40%; border-right: 0; border-top: 1px solid var(--rule); }
+    #map { height: 60%; flex: none; width: 100%; }
+  }
+</style>
+</head>
+<body>
+
+<aside id="sidebar">
+  <header>
+    <h1 id="title">LA Street Centerlines</h1>
+  </header>
+  <div id="error" role="alert"></div>
+  <div id="detail" aria-live="polite">
+    <p id="empty">Select a street on the map to see its description.</p>
+    <div id="info" hidden>
+      <p id="description"></p>
+      <details>
+        <summary>All attributes</summary>
+        <table id="attrs"></table>
+      </details>
+      <button id="clear" type="button">Clear selection</button>
+    </div>
+  </div>
+  <footer>
+    <p id="status">Loading streets…</p>
+  </footer>
+</aside>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!-- Optional: if LA_Street_Centerlines.js exists (var LA_STREETS = {...};), it loads without a server -->
+<script src="LA_Street_Centerlines.js" onerror="void 0"></script>
+<script>
+(function () {
+  var DATA_URL = "LA_Street_Centerlines.json";
+  var FIELD = "description";       // text shown under the title
+  var NAME_FIELD = "street";       // street name shown as the sidebar title
+  var DEFAULT_TITLE = "LA Street Centerlines";
+
+  var STYLE_DEFAULT  = { color: "#2b6a8a", weight: 2,   opacity: 0.85 };
+  var STYLE_HOVER    = { color: "#1b9aaa", weight: 5,   opacity: 1 };
+  var STYLE_SELECTED = { color: "#e0a100", weight: 6,   opacity: 1 };
+
+  // Canvas rendering keeps a large street network responsive.
+  // The tolerance makes thin lines easier to click.
+  var renderer = L.canvas({ tolerance: 6 });
+
+  var map = L.map("map", { preferCanvas: true, renderer: renderer })
+             .setView([34.05, -118.25], 11);
+
+  // Free basemaps: none of the Esri layers below need an API key.
+  var esriAttr = "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, OpenStreetMap contributors, and the GIS user community";
+  var esri = "https://server.arcgisonline.com/ArcGIS/rest/services/";
+
+  // Place and street names drawn above the street lines so they stay readable.
+  map.createPane("labels");
+  map.getPane("labels").style.zIndex = 650;
+  map.getPane("labels").style.pointerEvents = "none";
+
+  var lightGray = L.layerGroup([
+    L.tileLayer(esri + "Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+      { maxNativeZoom: 16, maxZoom: 19, attribution: esriAttr }),
+    L.tileLayer(esri + "Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+      { maxNativeZoom: 16, maxZoom: 19, pane: "labels" })
+  ]);
+
+  var streets = L.tileLayer(esri + "World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+    { maxNativeZoom: 19, maxZoom: 19, attribution: esriAttr });
+
+  var imagery = L.layerGroup([
+    L.tileLayer(esri + "World_Imagery/MapServer/tile/{z}/{y}/{x}",
+      { maxNativeZoom: 19, maxZoom: 19, attribution: esriAttr }),
+    L.tileLayer(esri + "Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
+      { maxNativeZoom: 19, maxZoom: 19, pane: "labels" })
+  ]);
+
+  // OpenStreetMap asks for a Referer header, which browsers don't send from a
+  // page opened off disk, so this one may show a "blocked" tile via file://.
+  var osm = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  });
+
+  lightGray.addTo(map);
+  L.control.layers({
+    "Light gray": lightGray,
+    "Streets": streets,
+    "Imagery": imagery,
+    "OpenStreetMap": osm
+  }, null, { collapsed: true }).addTo(map);
+
+  var titleEl  = document.getElementById("title");
+  var statusEl = document.getElementById("status");
+  var errorEl  = document.getElementById("error");
+  var emptyEl  = document.getElementById("empty");
+  var infoEl   = document.getElementById("info");
+  var descEl   = document.getElementById("description");
+  var attrsEl  = document.getElementById("attrs");
+
+  var selected = null;
+  var streetLayer = null;
+
+  // Look up a property by exact name first, then ignoring case.
+  function getProp(props, field) {
+    if (field in props) return props[field];
+    var lower = field.toLowerCase();
+    var key = Object.keys(props).find(function (k) { return k.toLowerCase() === lower; });
+    return key === undefined ? undefined : props[key];
+  }
+
+  function showSelection(layer) {
+    var props = layer.feature.properties || {};
+    var value = getProp(props, FIELD);
+    var name  = getProp(props, NAME_FIELD);
+
+    titleEl.textContent = (name === null || name === undefined || name === "")
+      ? "Unnamed street"
+      : String(name);
+
+    descEl.textContent = (value === null || value === undefined || value === "")
+      ? "No description available for this street."
+      : String(value);
+
+    attrsEl.innerHTML = "";
+    Object.keys(props).forEach(function (key) {
+      var tr = document.createElement("tr");
+      var th = document.createElement("th");
+      var td = document.createElement("td");
+      th.textContent = key;
+      td.textContent = props[key] === null || props[key] === undefined ? "" : props[key];
+      tr.appendChild(th);
+      tr.appendChild(td);
+      attrsEl.appendChild(tr);
+    });
+
+    emptyEl.hidden = true;
+    infoEl.hidden = false;
+  }
+
+  function clearSelection() {
+    if (selected && streetLayer) streetLayer.resetStyle(selected);
+    selected = null;
+    titleEl.textContent = DEFAULT_TITLE;
+    infoEl.hidden = true;
+    emptyEl.hidden = false;
+  }
+
+  function onEachFeature(feature, layer) {
+    layer.on({
+      mouseover: function () {
+        if (layer !== selected) layer.setStyle(STYLE_HOVER);
+        map.getContainer().style.cursor = "pointer";
+      },
+      mouseout: function () {
+        if (layer !== selected) streetLayer.resetStyle(layer);
+        map.getContainer().style.cursor = "";
+      },
+      click: function (e) {
+        L.DomEvent.stopPropagation(e);
+        if (selected && selected !== layer) streetLayer.resetStyle(selected);
+        selected = layer;
+        layer.setStyle(STYLE_SELECTED);
+        layer.bringToFront();
+        showSelection(layer);
+      }
+    });
+  }
+
+  document.getElementById("clear").addEventListener("click", clearSelection);
+  map.on("click", clearSelection);
+
+  function render(data) {
+    if (streetLayer) map.removeLayer(streetLayer);
+    selected = null;
+    titleEl.textContent = DEFAULT_TITLE;
+    infoEl.hidden = true;
+    emptyEl.hidden = false;
+    errorEl.style.display = "none";
+
+    streetLayer = L.geoJSON(data, {
+      style: function () { return STYLE_DEFAULT; },
+      onEachFeature: onEachFeature,
+      renderer: renderer
+    }).addTo(map);
+
+    var bounds = streetLayer.getBounds();
+    if (bounds.isValid()) map.fitBounds(bounds);
+
+    var count = (data.features || []).length;
+    statusEl.textContent = count.toLocaleString() + " streets loaded";
+  }
+
+  function showPicker(reason) {
+    statusEl.textContent = "Streets did not load.";
+    errorEl.innerHTML = reason +
+      '<p style="margin:10px 0 6px">Choose the file manually:</p>' +
+      '<input type="file" id="picker" accept=".json,.geojson,application/json">';
+    errorEl.style.display = "block";
+    document.getElementById("picker").addEventListener("change", function (e) {
+      var file = e.target.files[0];
+      if (!file) return;
+      statusEl.textContent = "Loading streets…";
+      file.text().then(function (text) { render(JSON.parse(text)); })
+        .catch(function (err) { showPicker("That file could not be read as GeoJSON (" + err.message + ")."); });
+    });
+  }
+
+  if (typeof LA_STREETS !== "undefined") {
+    render(LA_STREETS);
+  } else {
+    fetch(DATA_URL)
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(render)
+      .catch(function (err) {
+        showPicker(location.protocol === "file:"
+          ? "The browser blocked reading <code>" + DATA_URL + "</code> directly from disk."
+          : "Could not load <code>" + DATA_URL + "</code> (" + err.message + ").");
+      });
+  }
+})();
+</script>
+</body>
+</html>
